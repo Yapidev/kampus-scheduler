@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -333,4 +334,37 @@ def test_campus_hours_and_weekdays_rules_enforced(test_client: TestClient):
     # 07:00 -> slot 1 (07:00-07:50), slot 2 (07:50-08:40) -> earliest valid >= 08:00 is slot 3 (08:40)
     # Latest ending <= 16:20 -> slot 11 ends 16:10, slot 12 ends 17:00 -> start_slot must be in [3..10]
     assert 3 <= p.start_slot <= 10
+
+
+def test_async_generate_job_and_polling(test_client: TestClient):
+    """Async generate endpoint returns 202 immediately and polling returns the completed schedule."""
+    res_start = test_client.post(
+        "/api/schedule/generate-async",
+        json={"preset": "balanced", "time_limit_seconds": 10.0, "respect_locked": True},
+    )
+    assert res_start.status_code == 202
+    job = res_start.json()
+    job_id = job["job_id"]
+    assert job["status"] in ("pending", "running", "completed")
+    assert job["period_id"] > 0
+
+    final_job = job
+    deadline = time.time() + 25.0
+    while time.time() < deadline:
+        poll = test_client.get(f"/api/schedule/jobs/{job_id}")
+        assert poll.status_code == 200
+        final_job = poll.json()
+        if final_job["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.2)
+
+    assert final_job["status"] == "completed", final_job.get("error_message")
+    assert final_job["result"] is not None
+    assert len(final_job["result"]["entries"]) == 75
+    assert final_job["result"]["efficiency"]["seat_fill_efficiency_pct"] > 50.0
+    assert final_job["elapsed_ms"] >= 0
+
+    r_missing = test_client.get("/api/schedule/jobs/nonexistent-job-id")
+    assert r_missing.status_code == 404
+
 

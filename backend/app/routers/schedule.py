@@ -1,5 +1,10 @@
+import threading
+import time
+from typing import Any
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.database import get_db
 from app.models import ScheduleEntry, ScheduleRun
@@ -11,6 +16,7 @@ from app.schemas import (
     MoveValidationResponse,
     PreflightReport,
     ScheduleEntryOut,
+    ScheduleJobOut,
 )
 from app.services.conflict_checker import validate_entry_move
 from app.solver.engine import solve_schedule
@@ -20,34 +26,23 @@ from app.solver.preflight import run_preflight_audit
 
 router = APIRouter(prefix="/api/schedule", tags=["Schedule & Solver"])
 
-
-@router.get("/preflight", response_model=PreflightReport)
-def preflight_check(
-    period_id: int | None = None,
-    respect_locked: bool = True,
-    db: Session = Depends(get_db),
-):
-    ctx = load_period_context(db, period_id)
-    locked = [e for e in ctx.entries if e.is_locked] if respect_locked else []
-    return run_preflight_audit(
-        period=ctx.period,
-        rooms=ctx.rooms,
-        classes=ctx.classes,
-        lecturers=ctx.lecturers,
-        courses=ctx.courses,
-        offerings=ctx.offerings,
-        locked_entries=locked,
-    )
+_JOBS_LOCK = threading.Lock()
+_JOBS: dict[str, dict[str, Any]] = {}
 
 
-@router.post("/generate")
-def generate_schedule(payload: GenerateScheduleRequest, db: Session = Depends(get_db)):
+def _prune_jobs() -> None:
+    if len(_JOBS) <= 50:
+        return
+    finished = [
+        jid for jid, j in _JOBS.items() if j["status"] in ("completed", "failed")
+    ]
+    for jid in finished[: max(0, len(_JOBS) - 40)]:
+        _JOBS.pop(jid, None)
+
+
+def _run_preflight_and_validate(db: Session, payload: GenerateScheduleRequest):
     ctx = load_period_context(db, payload.period_id)
     locked = [e for e in ctx.entries if e.is_locked] if payload.respect_locked else []
-    manual_flags = {
-        (e.offering_id, e.session_index): e.is_manual_override for e in locked
-    }
-
     preflight = run_preflight_audit(
         period=ctx.period,
         rooms=ctx.rooms,
@@ -65,6 +60,16 @@ def generate_schedule(payload: GenerateScheduleRequest, db: Session = Depends(ge
                 "issues": [i.model_dump() for i in preflight.issues],
             },
         )
+    return ctx, locked
+
+
+def _execute_solve_and_persist(
+    db: Session, payload: GenerateScheduleRequest
+) -> dict[str, Any]:
+    ctx, locked = _run_preflight_and_validate(db, payload)
+    manual_flags = {
+        (e.offering_id, e.session_index): e.is_manual_override for e in locked
+    }
 
     solve_out = solve_schedule(
         period=ctx.period,
@@ -88,7 +93,6 @@ def generate_schedule(payload: GenerateScheduleRequest, db: Session = Depends(ge
             },
         )
 
-    # Replace entries cleanly while preserving locked metadata
     db.query(ScheduleEntry).filter(ScheduleEntry.period_id == ctx.period.id).delete()
 
     run = ScheduleRun(
@@ -137,7 +141,6 @@ def generate_schedule(payload: GenerateScheduleRequest, db: Session = Depends(ge
     run.metrics_json = efficiency.model_dump()
     db.commit()
 
-    # Reload formatted response
     fresh_ctx = load_period_context(db, ctx.period.id)
     entries_out = filter_and_format_entries(fresh_ctx)
     return {
@@ -148,6 +151,128 @@ def generate_schedule(payload: GenerateScheduleRequest, db: Session = Depends(ge
         "efficiency": efficiency.model_dump(),
         "entries": [e.model_dump() for e in entries_out],
     }
+
+
+def _serialize_job(job: dict[str, Any]) -> ScheduleJobOut:
+    elapsed = (
+        int((time.monotonic() - job["started_mono"]) * 1000)
+        if job["status"] in ("pending", "running")
+        else int(job["final_elapsed_ms"])
+    )
+    return ScheduleJobOut(
+        job_id=job["job_id"],
+        period_id=job["period_id"],
+        status=job["status"],
+        preset=job["preset"],
+        time_limit_seconds=job["time_limit_seconds"],
+        elapsed_ms=elapsed,
+        error_message=job.get("error_message"),
+        result=job.get("result"),
+    )
+
+
+@router.get("/preflight", response_model=PreflightReport)
+def preflight_check(
+    period_id: int | None = None,
+    respect_locked: bool = True,
+    db: Session = Depends(get_db),
+):
+    ctx = load_period_context(db, period_id)
+    locked = [e for e in ctx.entries if e.is_locked] if respect_locked else []
+    return run_preflight_audit(
+        period=ctx.period,
+        rooms=ctx.rooms,
+        classes=ctx.classes,
+        lecturers=ctx.lecturers,
+        courses=ctx.courses,
+        offerings=ctx.offerings,
+        locked_entries=locked,
+    )
+
+
+@router.post("/generate")
+def generate_schedule(payload: GenerateScheduleRequest, db: Session = Depends(get_db)):
+    return _execute_solve_and_persist(db, payload)
+
+
+@router.post("/generate-async", response_model=ScheduleJobOut, status_code=202)
+def generate_schedule_async(payload: GenerateScheduleRequest, db: Session = Depends(get_db)):
+    ctx, _locked = _run_preflight_and_validate(db, payload)
+    period_id = ctx.period.id
+
+    with _JOBS_LOCK:
+        for existing in _JOBS.values():
+            if existing["period_id"] == period_id and existing["status"] in ("pending", "running"):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Proses generate jadwal sedang berjalan untuk periode ini.",
+                )
+
+        _prune_jobs()
+        job_id = uuid.uuid4().hex
+        job_record: dict[str, Any] = {
+            "job_id": job_id,
+            "period_id": period_id,
+            "status": "pending",
+            "preset": payload.preset,
+            "time_limit_seconds": payload.time_limit_seconds,
+            "started_mono": time.monotonic(),
+            "final_elapsed_ms": 0,
+            "error_message": None,
+            "result": None,
+        }
+        _JOBS[job_id] = job_record
+
+    bind = db.get_bind()
+    WorkerSession = sessionmaker(bind=bind, autoflush=False, autocommit=False, expire_on_commit=False)
+    job_payload = payload.model_copy(update={"period_id": period_id})
+
+    def _worker():
+        worker_db = WorkerSession()
+        with _JOBS_LOCK:
+            _JOBS[job_id]["status"] = "running"
+        try:
+            res = _execute_solve_and_persist(worker_db, job_payload)
+            with _JOBS_LOCK:
+                _JOBS[job_id]["status"] = "completed"
+                _JOBS[job_id]["final_elapsed_ms"] = int(
+                    (time.monotonic() - _JOBS[job_id]["started_mono"]) * 1000
+                )
+                _JOBS[job_id]["result"] = res
+        except HTTPException as exc:
+            msg = (
+                exc.detail.get("message")
+                if isinstance(exc.detail, dict)
+                else str(exc.detail)
+            )
+            with _JOBS_LOCK:
+                _JOBS[job_id]["status"] = "failed"
+                _JOBS[job_id]["final_elapsed_ms"] = int(
+                    (time.monotonic() - _JOBS[job_id]["started_mono"]) * 1000
+                )
+                _JOBS[job_id]["error_message"] = msg or "Generate jadwal gagal."
+        except Exception as exc:
+            with _JOBS_LOCK:
+                _JOBS[job_id]["status"] = "failed"
+                _JOBS[job_id]["final_elapsed_ms"] = int(
+                    (time.monotonic() - _JOBS[job_id]["started_mono"]) * 1000
+                )
+                _JOBS[job_id]["error_message"] = str(exc) or "Terjadi kesalahan internal solver."
+        finally:
+            worker_db.close()
+
+    threading.Thread(target=_worker, daemon=True).start()
+    with _JOBS_LOCK:
+        return _serialize_job(_JOBS[job_id])
+
+
+@router.get("/jobs/{job_id}", response_model=ScheduleJobOut)
+def get_generate_job_status(job_id: str):
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job generate tidak ditemukan.")
+        return _serialize_job(job)
 
 
 @router.get("", response_model=list[ScheduleEntryOut])

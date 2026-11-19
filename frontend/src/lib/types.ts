@@ -287,3 +287,14 @@ export interface GenerateResponse {
   efficiency: EfficiencySummary;
   entries: ScheduleEntry[];
 }
+
+export interface ScheduleJobStatus {
+  job_id: string;
+  period_id: number;
+  status: "pending" | "running" | "completed" | "failed";
+  preset: string;
+  time_limit_seconds: number;
+  elapsed_ms: number;
+  error_message?: string | null;
+  result?: GenerateResponse | null;
+}

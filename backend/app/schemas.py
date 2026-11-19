@@ -301,8 +301,19 @@ class GenerateScheduleRequest(BaseModel):
     period_id: int | None = None
     preset: Literal["balanced", "best_fit", "compact_rooms", "custom"] = "balanced"
     weights: OptimizationWeights | None = None
-    time_limit_seconds: float = Field(default=15.0, ge=1.0, le=120.0)
+    time_limit_seconds: float = Field(default=15.0, ge=1.0, le=300.0)
     respect_locked: bool = True
+
+
+class ScheduleJobOut(BaseModel):
+    job_id: str
+    period_id: int
+    status: Literal["pending", "running", "completed", "failed"]
+    preset: str
+    time_limit_seconds: float
+    elapsed_ms: int
+    error_message: str | None = None
+    result: dict[str, Any] | None = None
 
 
 class PreflightIssue(BaseModel):

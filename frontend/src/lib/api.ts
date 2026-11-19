@@ -12,6 +12,7 @@ import type {
   PreflightReport,
   Room,
   ScheduleEntry,
+  ScheduleJobStatus,
   ScheduleRunSummary,
   StudentClass,
   StudyProgram,
@@ -167,6 +168,43 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  startGenerateAsync: (payload: {
+    period_id?: number;
+    preset: "balanced" | "best_fit" | "compact_rooms" | "custom";
+    weights?: OptimizationWeights;
+    time_limit_seconds: number;
+    respect_locked: boolean;
+  }) =>
+    request<ScheduleJobStatus>("/api/schedule/generate-async", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getGenerateJob: (jobId: string) =>
+    request<ScheduleJobStatus>(`/api/schedule/jobs/${jobId}`),
+  generateScheduleWithPolling: async (
+    payload: {
+      period_id?: number;
+      preset: "balanced" | "best_fit" | "compact_rooms" | "custom";
+      weights?: OptimizationWeights;
+      time_limit_seconds: number;
+      respect_locked: boolean;
+    },
+    onProgress?: (job: ScheduleJobStatus) => void
+  ): Promise<GenerateResponse> => {
+    const initial = await api.startGenerateAsync(payload);
+    onProgress?.(initial);
+    while (true) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const job = await api.getGenerateJob(initial.job_id);
+      onProgress?.(job);
+      if (job.status === "completed" && job.result) {
+        return job.result;
+      }
+      if (job.status === "failed") {
+        throw new ApiError(job.error_message || "Generate jadwal gagal.", 409, job);
+      }
+    }
+  },
   listSchedule: (filters?: {
     period_id?: number;
     program_id?: number;

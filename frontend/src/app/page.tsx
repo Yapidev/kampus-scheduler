@@ -25,6 +25,7 @@ export default function DashboardPage() {
   const [eff, setEff] = useState<EfficiencySummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [quickGenerating, setQuickGenerating] = useState(false);
+  const [quickElapsedSec, setQuickElapsedSec] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const loadAnalytics = useCallback(async () => {
@@ -52,19 +53,24 @@ export default function DashboardPage() {
   const handleQuickGenerate = async () => {
     if (!activePeriod) return;
     setQuickGenerating(true);
+    setQuickElapsedSec(0);
     setError(null);
     try {
-      await api.generateSchedule({
-        period_id: activePeriod.id,
-        preset: "balanced",
-        time_limit_seconds: 15,
-        respect_locked: true,
-      });
+      await api.generateScheduleWithPolling(
+        {
+          period_id: activePeriod.id,
+          preset: "balanced",
+          time_limit_seconds: 15,
+          respect_locked: true,
+        },
+        (job) => setQuickElapsedSec(Math.floor(job.elapsed_ms / 1000))
+      );
       await loadAnalytics();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal generate jadwal");
     } finally {
       setQuickGenerating(false);
+      setQuickElapsedSec(0);
     }
   };
 
@@ -150,7 +156,7 @@ export default function DashboardPage() {
             {quickGenerating ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Mengoptimalkan...
+                Mengoptimalkan ({quickElapsedSec}s)...
               </>
             ) : (
               <>

@@ -19,6 +19,7 @@ import type {
   GenerateResponse,
   OptimizationWeights,
   PreflightReport,
+  ScheduleJobStatus,
   ScheduleRunSummary,
 } from "@/lib/types";
 import { usePeriod } from "@/components/PeriodContext";
@@ -68,6 +69,7 @@ export default function GeneratePage() {
   const [runs, setRuns] = useState<ScheduleRunSummary[]>([]);
   const [loadingAudit, setLoadingAudit] = useState<boolean>(false);
   const [generating, setGenerating] = useState<boolean>(false);
+  const [jobStatus, setJobStatus] = useState<ScheduleJobStatus | null>(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -103,16 +105,20 @@ export default function GeneratePage() {
   const handleGenerate = async () => {
     if (!activePeriod) return;
     setGenerating(true);
+    setJobStatus(null);
     setErrorMsg(null);
     setResult(null);
     try {
-      const res = await api.generateSchedule({
-        period_id: activePeriod.id,
-        preset,
-        weights: preset === "custom" ? weights : undefined,
-        time_limit_seconds: timeLimit,
-        respect_locked: respectLocked,
-      });
+      const res = await api.generateScheduleWithPolling(
+        {
+          period_id: activePeriod.id,
+          preset,
+          weights: preset === "custom" ? weights : undefined,
+          time_limit_seconds: timeLimit,
+          respect_locked: respectLocked,
+        },
+        (job) => setJobStatus(job)
+      );
       setResult(res);
       await loadContext();
     } catch (err) {
@@ -123,6 +129,7 @@ export default function GeneratePage() {
       }
     } finally {
       setGenerating(false);
+      setJobStatus(null);
     }
   };
 
@@ -289,13 +296,13 @@ export default function GeneratePage() {
               <input
                 type="number"
                 min={2}
-                max={120}
+                max={300}
                 value={timeLimit}
                 onChange={(e) => setTimeLimit(Number(e.target.value))}
                 className="mt-1 w-full rounded-lg border border-[#dadce0] px-3 py-2 text-sm focus:outline-none focus:border-[#1a73e8]"
               />
               <span className="text-[11px] text-[#5f6368] mt-1 block">
-                Waktu lebih lama membantu solver mencari efisiensi lebih tinggi.
+                Berjalan di background (async polling) sehingga aman dari timeout HTTPS hingga 300 detik.
               </span>
             </label>
 
@@ -318,6 +325,28 @@ export default function GeneratePage() {
             </label>
           </div>
 
+          {generating && (
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-xs text-[#5f6368]">
+                <span>Optimasi berjalan di background...</span>
+                <span className="font-medium text-[#1a73e8]">
+                  {Math.floor((jobStatus?.elapsed_ms ?? 0) / 1000)}s / {timeLimit}s
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-[#e8eaed] overflow-hidden">
+                <div
+                  className="h-full bg-[#1a73e8] rounded-full transition-all duration-500"
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      Math.round(((jobStatus?.elapsed_ms ?? 0) / Math.max(1, timeLimit * 1000)) * 100)
+                    )}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
           <button
             type="button"
             onClick={() => void handleGenerate()}
@@ -325,7 +354,9 @@ export default function GeneratePage() {
             className="w-full inline-flex items-center justify-center gap-2 h-10 px-5 rounded-full bg-[#1a73e8] hover:bg-[#1765cc] text-white font-medium text-sm disabled:opacity-50 cursor-pointer transition-shadow hover:shadow-sm"
           >
             <Sparkles className={`h-4 w-4 ${generating ? "animate-spin" : ""}`} />
-            {generating ? "Mengoptimalkan Jadwal..." : "Generate Jadwal Otomatis"}
+            {generating
+              ? `Mengoptimalkan (${Math.floor((jobStatus?.elapsed_ms ?? 0) / 1000)}s)...`
+              : "Generate Jadwal Otomatis"}
           </button>
         </div>
       </div>
