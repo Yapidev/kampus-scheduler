@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type {
+  Building,
   Lecturer,
   Room,
   ScheduleEntry,
@@ -25,12 +26,15 @@ import { TimetableGrid, type ViewMode } from "@/components/TimetableGrid";
 export default function JadwalPage() {
   const { activePeriod } = usePeriod();
   const [mode, setMode] = useState<ViewMode>("matrix");
+  const [buildings, setBuildings] = useState<Building[]>([]);
   const [programs, setPrograms] = useState<StudyProgram[]>([]);
   const [classes, setClasses] = useState<StudentClass[]>([]);
   const [lecturers, setLecturers] = useState<Lecturer[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [allEntries, setAllEntries] = useState<ScheduleEntry[]>([]);
 
+  const [selectedBuildingId, setSelectedBuildingId] = useState<number | "">("");
+  const [onlyOccupiedRooms, setOnlyOccupiedRooms] = useState<boolean>(false);
   const [selectedProgramId, setSelectedProgramId] = useState<number | "">("");
   const [selectedClassId, setSelectedClassId] = useState<number | "">("");
   const [selectedLecturerId, setSelectedLecturerId] = useState<number | "">("");
@@ -43,13 +47,15 @@ export default function JadwalPage() {
     if (!activePeriod) return;
     setLoading(true);
     try {
-      const [progs, clsList, lecList, roomList, sched] = await Promise.all([
+      const [bldList, progs, clsList, lecList, roomList, sched] = await Promise.all([
+        api.listBuildings(),
         api.listPrograms(),
         api.listClasses(activePeriod.id),
         api.listLecturers(),
         api.listRooms(),
         api.listSchedule({ period_id: activePeriod.id }),
       ]);
+      setBuildings(bldList);
       setPrograms(progs);
       setClasses(clsList);
       setLecturers(lecList);
@@ -138,7 +144,7 @@ export default function JadwalPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+      <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">
             Grid Jadwal Interaktif & Drag-and-Drop
@@ -148,12 +154,12 @@ export default function JadwalPage() {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap xl:flex-nowrap items-center gap-2 shrink-0">
           <a
             href={api.exportUrl("pdf", exportFilter)}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap"
           >
             <FileText className="h-3.5 w-3.5 text-rose-600" />
             Export PDF
@@ -162,7 +168,7 @@ export default function JadwalPage() {
             href={api.exportUrl("xlsx", exportFilter)}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap"
           >
             <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
             Export Excel
@@ -171,14 +177,14 @@ export default function JadwalPage() {
             href={api.exportUrl("ics", exportFilter)}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap"
           >
             <Calendar className="h-3.5 w-3.5 text-blue-600" />
             Export iCal (.ics)
           </a>
           <button
             onClick={() => void handleClearUnlocked()}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-rose-200 bg-rose-50 text-xs font-semibold text-rose-700 hover:bg-rose-100 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-xs font-semibold text-rose-700 hover:bg-rose-100 cursor-pointer whitespace-nowrap"
           >
             <Trash2 className="h-3.5 w-3.5" />
             Reset Draft
@@ -187,8 +193,8 @@ export default function JadwalPage() {
       </div>
 
       {/* View Switcher & Filters */}
-      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="inline-flex flex-wrap rounded-lg bg-slate-100 p-1 gap-1">
+      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <div className="inline-flex flex-wrap rounded-lg bg-slate-100 p-1 gap-1 self-start">
           {(
             [
               ["matrix", "Matriks Semua Ruangan"],
@@ -214,17 +220,44 @@ export default function JadwalPage() {
 
         <div className="flex flex-wrap items-center gap-2.5">
           {mode === "matrix" && (
-            <select
-              value={selectedDay}
-              onChange={(e) => setSelectedDay(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium bg-white"
-            >
-              {activePeriod.days.map((d) => (
-                <option key={d} value={d}>
-                  Hari: {d}
-                </option>
-              ))}
-            </select>
+            <>
+              <select
+                value={selectedBuildingId}
+                onChange={(e) =>
+                  setSelectedBuildingId(e.target.value ? Number(e.target.value) : "")
+                }
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm bg-white"
+              >
+                <option value="">Semua Gedung</option>
+                {buildings.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.code} — {b.name}
+                  </option>
+                ))}
+              </select>
+
+              <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-xs font-medium text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={onlyOccupiedRooms}
+                  onChange={(e) => setOnlyOccupiedRooms(e.target.checked)}
+                  className="rounded accent-blue-600"
+                />
+                Ruang terpakai saja
+              </label>
+
+              <select
+                value={selectedDay}
+                onChange={(e) => setSelectedDay(e.target.value)}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium bg-white"
+              >
+                {activePeriod.days.map((d) => (
+                  <option key={d} value={d}>
+                    Hari: {d}
+                  </option>
+                ))}
+              </select>
+            </>
           )}
 
           {mode === "class" && (
@@ -331,6 +364,8 @@ export default function JadwalPage() {
           allEntries={allEntries}
           rooms={rooms}
           selectedDayForMatrix={selectedDay}
+          selectedBuildingId={selectedBuildingId}
+          onlyOccupiedRooms={onlyOccupiedRooms}
           onUpdated={loadData}
         />
       )}

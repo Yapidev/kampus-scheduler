@@ -27,6 +27,8 @@ interface TimetableGridProps {
   allEntries: ScheduleEntry[];
   rooms: Room[];
   selectedDayForMatrix: string;
+  selectedBuildingId?: number | "";
+  onlyOccupiedRooms?: boolean;
   onUpdated: () => Promise<void>;
 }
 
@@ -39,6 +41,9 @@ interface PendingMove {
   checking: boolean;
 }
 
+const STANDARD_ROW_HEIGHT = 76;
+const MATRIX_ROW_HEIGHT = 70;
+
 export function TimetableGrid({
   period,
   mode,
@@ -46,6 +51,8 @@ export function TimetableGrid({
   allEntries,
   rooms,
   selectedDayForMatrix,
+  selectedBuildingId = "",
+  onlyOccupiedRooms = false,
   onUpdated,
 }: TimetableGridProps) {
   const [draggingId, setDraggingId] = useState<number | null>(null);
@@ -207,13 +214,20 @@ export function TimetableGrid({
     return true;
   };
 
-  const renderEntryCard = (entry: ScheduleEntry, compact = false) => {
+  const renderEntryCard = (entry: ScheduleEntry, isMatrix = false, stretchPx?: number) => {
     const color = courseCardColor(entry.course_code);
     const clsLabel =
       entry.class_code +
       (entry.extra_class_codes.length > 0
         ? `+${entry.extra_class_codes.join("+")}`
         : "");
+    const fillBadgeColor =
+      entry.seat_fill_pct >= 75
+        ? "bg-emerald-600/15 text-emerald-900"
+        : entry.seat_fill_pct >= 55
+        ? "bg-amber-600/15 text-amber-900"
+        : "bg-rose-600/15 text-rose-900";
+
     return (
       <div
         draggable
@@ -227,13 +241,14 @@ export function TimetableGrid({
           setDragOverKey(null);
         }}
         onClick={() => setSelectedEntry(entry)}
-        className={`h-full rounded-md border p-2 cursor-grab active:cursor-grabbing hover:brightness-[0.98] transition-all flex flex-col justify-between select-none ${color} ${
+        style={stretchPx ? { minHeight: `${stretchPx}px` } : undefined}
+        className={`w-full h-full rounded-lg border p-2.5 cursor-grab active:cursor-grabbing shadow-2xs hover:shadow-md transition-all flex flex-col justify-between select-none overflow-hidden ${color} ${
           draggingId === entry.id ? "opacity-50" : ""
         }`}
       >
-        <div>
-          <div className="flex items-start justify-between gap-1">
-            <span className="font-medium text-[11px] leading-tight">
+        <div className="min-w-0">
+          <div className="flex items-start justify-between gap-1.5">
+            <span className="font-bold text-[11px] leading-tight break-words">
               {entry.course_code} · {clsLabel}
             </span>
             <button
@@ -243,29 +258,31 @@ export function TimetableGrid({
               className="p-0.5 rounded hover:bg-black/10 shrink-0"
             >
               {entry.is_locked ? (
-                <Lock className="h-3 w-3" />
+                <Lock className="h-3 w-3 text-slate-800" />
               ) : (
-                <Unlock className="h-3 w-3 opacity-40" />
+                <Unlock className="h-3 w-3 opacity-45" />
               )}
             </button>
           </div>
-          {!compact && (
-            <div className="text-[11px] font-medium mt-0.5 line-clamp-2 leading-snug text-[#202124]">
+          {(!isMatrix || entry.duration_slots >= 2) && (
+            <div className="text-[11px] font-medium mt-1 line-clamp-2 leading-snug">
               {entry.course_name}
             </div>
           )}
         </div>
 
-        <div className="mt-1.5 pt-1 border-t border-black/10 text-[10px] space-y-0.5 text-[#5f6368]">
+        <div className="mt-2 pt-1.5 border-t border-black/10 text-[10px] space-y-1">
           {mode !== "lecturer" && (
-            <div className="truncate">{entry.lecturer_name}</div>
+            <div className="truncate font-medium opacity-90">{entry.lecturer_name}</div>
           )}
-          <div className="flex items-center justify-between gap-1">
-            <span className="font-medium text-[#202124] truncate">
-              {mode === "room" || mode === "matrix" ? entry.time_range : entry.room_code}
+          <div className="flex items-center justify-between gap-1.5 flex-wrap">
+            <span className="font-semibold whitespace-nowrap">
+              {mode === "room" || isMatrix ? entry.time_range : entry.room_code}
             </span>
-            <span className="px-1.5 py-0.2 rounded-full text-[9.5px] font-medium bg-white/80 text-[#202124]">
-              {entry.student_count}/{entry.room_capacity} ({entry.seat_fill_pct}%)
+            <span
+              className={`px-1.5 py-0.5 rounded text-[9.5px] font-bold whitespace-nowrap ${fillBadgeColor}`}
+            >
+              {entry.student_count}/{entry.room_capacity} ({Math.round(entry.seat_fill_pct)}%)
             </span>
           </div>
         </div>
@@ -274,6 +291,20 @@ export function TimetableGrid({
   };
 
   const activeRooms = useMemo(() => rooms.filter((r) => r.is_active), [rooms]);
+
+  const matrixRooms = useMemo(() => {
+    const dayEntries = allEntries.filter((e) => e.day === selectedDayForMatrix);
+    const occupiedRoomIds = new Set(dayEntries.map((e) => e.room_id));
+    return activeRooms.filter((r) => {
+      if (selectedBuildingId !== "" && r.building_id !== Number(selectedBuildingId)) {
+        return false;
+      }
+      if (onlyOccupiedRooms && !occupiedRoomIds.has(r.id)) {
+        return false;
+      }
+      return true;
+    });
+  }, [activeRooms, allEntries, selectedDayForMatrix, selectedBuildingId, onlyOccupiedRooms]);
 
   const renderStandardGrid = () => {
     const startMap = new Map<string, ScheduleEntry[]>();
@@ -290,17 +321,17 @@ export function TimetableGrid({
     });
 
     return (
-      <div className="bg-white rounded-xl border border-[#dadce0] overflow-x-auto">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-x-auto">
         <table className="w-full border-collapse min-w-[820px] table-fixed">
           <thead>
-            <tr className="bg-[#f8f9fa] border-b border-[#dadce0]">
-              <th className="w-32 py-3 px-3 text-left text-xs font-medium text-[#5f6368]">
+            <tr className="bg-slate-50 border-b border-slate-200">
+              <th className="w-32 py-3 px-3 text-left text-xs font-semibold text-slate-600 uppercase">
                 Jam / Slot
               </th>
               {period.days.map((day) => (
                 <th
                   key={day}
-                  className="py-3 px-2 text-center text-xs font-medium text-[#202124] uppercase tracking-wider border-l border-[#dadce0]"
+                  className="py-3 px-2 text-center text-xs font-bold text-slate-800 uppercase border-l border-slate-200"
                 >
                   {day}
                 </th>
@@ -310,10 +341,10 @@ export function TimetableGrid({
           <tbody>
             {period.time_slots.map((slot) => (
               <React.Fragment key={slot.index}>
-                <tr className="border-t border-[#e8eaed]">
-                  <td className="py-2 px-3 align-top bg-[#f8f9fa]">
-                    <div className="text-xs font-medium text-[#202124]">Slot {slot.index}</div>
-                    <div className="text-[11px] text-[#5f6368]">{slot.label}</div>
+                <tr className="border-t border-slate-200 h-[76px]">
+                  <td className="py-2 px-3 align-top bg-slate-50/70">
+                    <div className="text-xs font-bold text-slate-800">Slot {slot.index}</div>
+                    <div className="text-[11px] text-slate-500">{slot.label}</div>
                   </td>
                   {period.days.map((day) => {
                     const cellKey = `${day}::${slot.index}`;
@@ -333,11 +364,13 @@ export function TimetableGrid({
 
                     const isDragOver = dragOverKey === cellKey;
                     const canHoverDrop = isDragOver && quickClientCanDrop(day, slot.index);
+                    const tdHeight = rowSpan * STANDARD_ROW_HEIGHT;
 
                     return (
                       <td
                         key={cellKey}
                         rowSpan={rowSpan}
+                        style={{ height: `${tdHeight}px` }}
                         onDragOver={(ev) => {
                           if (!draggingEntry || isBlocked) return;
                           ev.preventDefault();
@@ -355,25 +388,29 @@ export function TimetableGrid({
                               : draggingEntry.room_id;
                           void handleDropCell(day, slot.index, targetRoomId);
                         }}
-                        className={`p-1.5 border-l border-[#e8eaed] align-top transition-colors ${
+                        className={`p-1.5 border-l border-slate-200 align-top transition-colors ${
                           isBlocked
-                            ? "bg-[#f1f3f4] text-center"
+                            ? "bg-slate-100 text-center"
                             : isDragOver
                             ? canHoverDrop
-                              ? "bg-[#e6f4ea] ring-2 ring-inset ring-[#188038]"
-                              : "bg-[#fce8e6] ring-2 ring-inset ring-[#d93025]"
-                            : "h-16 hover:bg-[#f8f9fa]"
+                              ? "bg-emerald-50 ring-2 ring-inset ring-emerald-400"
+                              : "bg-rose-50 ring-2 ring-inset ring-rose-400"
+                            : "hover:bg-slate-50/60"
                         }`}
                       >
                         {isBlocked ? (
-                          <div className="text-[11px] text-[#80868b] italic py-3">
+                          <div className="text-[11px] text-slate-400 italic py-4">
                             Diblokir
                           </div>
                         ) : starts.length > 0 ? (
                           <div className="space-y-1.5 h-full">
                             {starts.map((st) => (
                               <div key={st.id} className="h-full">
-                                {renderEntryCard(st)}
+                                {renderEntryCard(
+                                  st,
+                                  false,
+                                  starts.length === 1 ? tdHeight - 12 : undefined
+                                )}
                               </div>
                             ))}
                           </div>
@@ -387,7 +424,7 @@ export function TimetableGrid({
                   <tr>
                     <td
                       colSpan={period.days.length + 1}
-                      className="py-1.5 px-3 text-center text-[11px] font-medium bg-[#fef7e0] text-[#b06000] border-y border-[#feefc3]"
+                      className="py-1.5 px-3 text-center text-[11px] font-semibold bg-amber-50 text-amber-800 border-y border-amber-200"
                     >
                       {slot.break_after_label || "Istirahat"} ({slot.break_after_minutes} menit)
                     </td>
@@ -405,44 +442,70 @@ export function TimetableGrid({
     const dayEntries = allEntries.filter((e) => e.day === selectedDayForMatrix);
     const startMap = new Map<string, ScheduleEntry>();
     const coveredSet = new Set<string>();
+    const roomSlotsToday = new Map<number, number>();
 
     dayEntries.forEach((e) => {
       startMap.set(`${e.room_id}::${e.start_slot}`, e);
+      roomSlotsToday.set(e.room_id, (roomSlotsToday.get(e.room_id) || 0) + e.duration_slots);
       for (let off = 1; off < e.duration_slots; off += 1) {
         coveredSet.add(`${e.room_id}::${e.start_slot + off}`);
       }
     });
 
+    if (matrixRooms.length === 0) {
+      return (
+        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-500">
+          Tidak ada ruangan yang sesuai dengan filter pada hari {selectedDayForMatrix}.
+        </div>
+      );
+    }
+
     return (
-      <div className="bg-white rounded-xl border border-[#dadce0] overflow-x-auto">
-        <table className="w-full border-collapse min-w-[1100px] table-fixed">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-x-auto">
+        <table className="w-full border-collapse table-fixed">
           <thead>
-            <tr className="bg-[#f8f9fa] border-b border-[#dadce0]">
-              <th className="w-28 py-3 px-2 text-left text-xs font-medium text-[#5f6368] sticky left-0 bg-[#f8f9fa] z-10">
+            <tr className="bg-slate-50 border-b border-slate-200">
+              <th className="w-28 py-3 px-2.5 text-left text-xs font-semibold text-slate-600 uppercase sticky left-0 bg-slate-50 z-20 border-r border-slate-200">
                 Slot ({selectedDayForMatrix})
               </th>
-              {activeRooms.map((r) => (
-                <th
-                  key={r.id}
-                  className="py-2.5 px-2 text-center border-l border-[#dadce0] w-36"
-                >
-                  <div className="text-xs font-medium text-[#202124]">{r.code}</div>
-                  <div className="text-[10px] text-[#5f6368] font-normal">
-                    {r.room_type} · {r.capacity} krs
-                  </div>
-                </th>
-              ))}
+              {matrixRooms.map((r) => {
+                const usedToday = roomSlotsToday.get(r.id) || 0;
+                return (
+                  <th
+                    key={r.id}
+                    className="py-2.5 px-2 text-center border-l border-slate-200 w-[166px]"
+                  >
+                    <div className="flex items-center justify-center gap-1.5">
+                      <span className="text-xs font-bold text-slate-900">{r.code}</span>
+                      <span
+                        className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+                          usedToday > 0
+                            ? "bg-blue-50 text-blue-700"
+                            : "bg-slate-100 text-slate-400"
+                        }`}
+                      >
+                        {usedToday}/{period.time_slots.length}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 font-normal mt-0.5 truncate">
+                      {r.room_type} · {r.capacity} krs
+                    </div>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
             {period.time_slots.map((slot) => (
               <React.Fragment key={slot.index}>
-                <tr className="border-t border-[#e8eaed]">
-                  <td className="py-2 px-2 align-top bg-[#f8f9fa] sticky left-0 z-10 border-r border-[#dadce0]">
-                    <div className="text-xs font-medium text-[#202124]">#{slot.index}</div>
-                    <div className="text-[10px] text-[#5f6368]">{slot.label}</div>
+                <tr className="border-t border-slate-200 h-[70px]">
+                  <td className="py-2 px-2.5 align-top bg-slate-50 sticky left-0 z-10 border-r border-slate-200">
+                    <div className="text-xs font-bold text-slate-800">#{slot.index}</div>
+                    <div className="text-[10px] text-slate-500 whitespace-nowrap">
+                      {slot.label}
+                    </div>
                   </td>
-                  {activeRooms.map((r) => {
+                  {matrixRooms.map((r) => {
                     const key = `${r.id}::${slot.index}`;
                     const entry = startMap.get(key);
                     const isCovered = coveredSet.has(key);
@@ -453,11 +516,14 @@ export function TimetableGrid({
                     const isDragOver = dragOverKey === key;
                     const canHoverDrop =
                       isDragOver && quickClientCanDrop(selectedDayForMatrix, slot.index);
+                    const dur = entry ? entry.duration_slots : 1;
+                    const tdHeight = dur * MATRIX_ROW_HEIGHT;
 
                     return (
                       <td
                         key={key}
-                        rowSpan={entry ? entry.duration_slots : 1}
+                        rowSpan={dur}
+                        style={{ height: `${tdHeight}px` }}
                         onDragOver={(ev) => {
                           if (!draggingEntry || isBlocked) return;
                           ev.preventDefault();
@@ -471,20 +537,20 @@ export function TimetableGrid({
                           if (!draggingEntry || isBlocked) return;
                           void handleDropCell(selectedDayForMatrix, slot.index, r.id);
                         }}
-                        className={`p-1 border-l border-[#e8eaed] align-top ${
+                        className={`p-1.5 border-l border-slate-200 align-top ${
                           isBlocked
-                            ? "bg-[#f1f3f4] text-center"
+                            ? "bg-slate-100 text-center"
                             : isDragOver
                             ? canHoverDrop
-                              ? "bg-[#e6f4ea] ring-2 ring-inset ring-[#188038]"
-                              : "bg-[#fce8e6] ring-2 ring-inset ring-[#d93025]"
-                            : "h-14 hover:bg-[#f8f9fa]"
+                              ? "bg-emerald-50 ring-2 ring-inset ring-emerald-400"
+                              : "bg-rose-50 ring-2 ring-inset ring-rose-400"
+                            : "hover:bg-slate-50"
                         }`}
                       >
                         {isBlocked ? (
-                          <div className="text-[10px] text-[#80868b] italic py-2">Blokir</div>
+                          <div className="text-[10px] text-slate-400 italic py-4">Blokir</div>
                         ) : entry ? (
-                          renderEntryCard(entry, true)
+                          renderEntryCard(entry, true, tdHeight - 12)
                         ) : null}
                       </td>
                     );
@@ -493,8 +559,8 @@ export function TimetableGrid({
                 {slot.break_after_minutes >= 20 && (
                   <tr>
                     <td
-                      colSpan={activeRooms.length + 1}
-                      className="py-1 px-3 text-center text-[11px] font-medium bg-[#fef7e0] text-[#b06000] border-y border-[#feefc3]"
+                      colSpan={matrixRooms.length + 1}
+                      className="py-1.5 px-3 text-center text-[11px] font-semibold bg-amber-50 text-amber-800 border-y border-amber-200"
                     >
                       {slot.break_after_label || "Istirahat"} ({slot.break_after_minutes} menit)
                     </td>
@@ -512,16 +578,16 @@ export function TimetableGrid({
     <div className="space-y-3">
       {toast && (
         <div
-          className={`fixed bottom-5 right-5 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium flex items-center gap-2 ${
+          className={`fixed bottom-5 right-5 z-50 px-4 py-3 rounded-xl shadow-lg border text-sm font-medium flex items-center gap-2 ${
             toast.type === "ok"
-              ? "bg-[#323232] text-white"
-              : "bg-[#c5221f] text-white"
+              ? "bg-emerald-900 text-white border-emerald-700"
+              : "bg-rose-900 text-white border-rose-700"
           }`}
         >
           {toast.type === "ok" ? (
-            <CheckCircle2 className="h-4 w-4 text-[#81c995]" />
+            <CheckCircle2 className="h-4 w-4 text-emerald-300" />
           ) : (
-            <AlertTriangle className="h-4 w-4 text-white" />
+            <AlertTriangle className="h-4 w-4 text-rose-300" />
           )}
           <span>{toast.text}</span>
         </div>
@@ -529,31 +595,31 @@ export function TimetableGrid({
 
       {mode === "matrix" ? renderRoomMatrix() : renderStandardGrid()}
 
-      {/* Google Material Detail Modal */}
+      {/* Detail Modal */}
       {selectedEntry && !pendingMove && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-[#dadce0] space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-200 space-y-4">
             <div className="flex items-start justify-between">
               <div>
-                <div className="text-xs font-medium text-[#1a73e8]">
+                <div className="text-xs font-bold text-blue-700 uppercase">
                   {selectedEntry.course_code} · {selectedEntry.program_name}
                 </div>
-                <h3 className="text-lg font-medium text-[#202124] mt-0.5">
+                <h3 className="text-lg font-bold text-slate-900 mt-0.5">
                   {selectedEntry.course_name}
                 </h3>
               </div>
               <button
                 onClick={() => setSelectedEntry(null)}
-                className="p-1.5 rounded-full text-[#5f6368] hover:bg-[#f1f3f4]"
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 text-sm bg-[#f8f9fa] p-4 rounded-xl border border-[#e8eaed]">
+            <div className="grid grid-cols-2 gap-3 text-sm bg-slate-50 p-4 rounded-xl border border-slate-200">
               <div>
-                <div className="text-xs text-[#5f6368]">Kelas</div>
-                <div className="font-medium text-[#202124]">
+                <div className="text-xs text-slate-500">Kelas</div>
+                <div className="font-semibold">
                   {selectedEntry.class_code}
                   {selectedEntry.extra_class_codes.length > 0
                     ? ` + ${selectedEntry.extra_class_codes.join(", ")}`
@@ -562,16 +628,16 @@ export function TimetableGrid({
                 </div>
               </div>
               <div>
-                <div className="text-xs text-[#5f6368]">Waktu</div>
-                <div className="font-medium text-[#202124]">
+                <div className="text-xs text-slate-500">Waktu</div>
+                <div className="font-semibold">
                   {selectedEntry.day}, {selectedEntry.time_range} (Slot{" "}
                   {selectedEntry.start_slot}-
                   {selectedEntry.start_slot + selectedEntry.duration_slots - 1})
                 </div>
               </div>
               <div>
-                <div className="text-xs text-[#5f6368]">Dosen Pengampu</div>
-                <div className="font-medium text-[#202124]">
+                <div className="text-xs text-slate-500">Dosen Pengampu</div>
+                <div className="font-semibold">
                   {selectedEntry.lecturer_name}
                   {selectedEntry.co_lecturer_name
                     ? ` & ${selectedEntry.co_lecturer_name}`
@@ -579,8 +645,8 @@ export function TimetableGrid({
                 </div>
               </div>
               <div>
-                <div className="text-xs text-[#5f6368]">Ruangan & Efisiensi</div>
-                <div className="font-medium text-[#202124]">
+                <div className="text-xs text-slate-500">Ruangan & Efisiensi</div>
+                <div className="font-semibold">
                   {selectedEntry.room_code} ({selectedEntry.building_code}) ·{" "}
                   {selectedEntry.student_count}/{selectedEntry.room_capacity} mhs (
                   {selectedEntry.seat_fill_pct}%)
@@ -592,7 +658,7 @@ export function TimetableGrid({
               <button
                 type="button"
                 onClick={() => void handleToggleLock(selectedEntry)}
-                className="inline-flex items-center gap-1.5 h-9 px-4 rounded-full border border-[#dadce0] text-sm font-medium text-[#202124] hover:bg-[#f8f9fa] cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-slate-300 text-sm font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
               >
                 {selectedEntry.is_locked ? (
                   <>
@@ -612,7 +678,7 @@ export function TimetableGrid({
                   setSelectedEntry(null);
                   void openMoveDialog(e, e.day, e.start_slot, e.room_id);
                 }}
-                className="inline-flex items-center gap-1.5 h-9 px-4 rounded-full bg-[#1a73e8] hover:bg-[#1765cc] text-white text-sm font-medium cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 cursor-pointer"
               >
                 <Move className="h-4 w-4" />
                 Pindah Waktu / Tukar Ruangan
@@ -624,14 +690,14 @@ export function TimetableGrid({
 
       {/* Manual Move & Conflict Validator Modal */}
       {pendingMove && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-[#dadce0] space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-200 space-y-4">
             <div className="flex items-start justify-between">
               <div>
-                <h3 className="text-lg font-medium text-[#202124]">
+                <h3 className="text-lg font-bold text-slate-900">
                   Validasi Perpindahan Jadwal
                 </h3>
-                <p className="text-xs text-[#5f6368] mt-0.5">
+                <p className="text-xs text-slate-500 mt-0.5">
                   {pendingMove.entry.course_code} — {pendingMove.entry.course_name} (
                   {pendingMove.entry.student_count} mahasiswa, {pendingMove.entry.duration_slots}{" "}
                   slot)
@@ -639,7 +705,7 @@ export function TimetableGrid({
               </div>
               <button
                 onClick={() => setPendingMove(null)}
-                className="p-1.5 rounded-full text-[#5f6368] hover:bg-[#f1f3f4]"
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -647,7 +713,7 @@ export function TimetableGrid({
 
             <div className="grid grid-cols-3 gap-3">
               <label className="block">
-                <span className="text-xs font-medium text-[#5f6368]">Hari</span>
+                <span className="text-xs font-medium text-slate-600">Hari</span>
                 <select
                   value={pendingMove.targetDay}
                   onChange={(e) =>
@@ -658,7 +724,7 @@ export function TimetableGrid({
                       pendingMove.targetRoomId
                     )
                   }
-                  className="mt-1 w-full rounded-lg border border-[#dadce0] px-2.5 py-2 text-sm focus:outline-none focus:border-[#1a73e8]"
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-2 text-sm"
                 >
                   {period.days.map((d) => (
                     <option key={d} value={d}>
@@ -669,7 +735,7 @@ export function TimetableGrid({
               </label>
 
               <label className="block">
-                <span className="text-xs font-medium text-[#5f6368]">Slot Mulai</span>
+                <span className="text-xs font-medium text-slate-600">Slot Mulai</span>
                 <select
                   value={pendingMove.targetSlot}
                   onChange={(e) =>
@@ -680,7 +746,7 @@ export function TimetableGrid({
                       pendingMove.targetRoomId
                     )
                   }
-                  className="mt-1 w-full rounded-lg border border-[#dadce0] px-2.5 py-2 text-sm focus:outline-none focus:border-[#1a73e8]"
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-2 text-sm"
                 >
                   {period.time_slots.map((s) => (
                     <option key={s.index} value={s.index}>
@@ -691,7 +757,7 @@ export function TimetableGrid({
               </label>
 
               <label className="block">
-                <span className="text-xs font-medium text-[#5f6368]">Ruangan</span>
+                <span className="text-xs font-medium text-slate-600">Ruangan</span>
                 <select
                   value={pendingMove.targetRoomId}
                   onChange={(e) =>
@@ -702,7 +768,7 @@ export function TimetableGrid({
                       Number(e.target.value)
                     )
                   }
-                  className="mt-1 w-full rounded-lg border border-[#dadce0] px-2.5 py-2 text-sm focus:outline-none focus:border-[#1a73e8]"
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-2 text-sm"
                 >
                   {activeRooms.map((r) => (
                     <option key={r.id} value={r.id}>
@@ -714,14 +780,14 @@ export function TimetableGrid({
             </div>
 
             {pendingMove.checking ? (
-              <div className="p-3 rounded-lg bg-[#f8f9fa] text-xs text-[#5f6368]">
+              <div className="p-3 rounded-lg bg-slate-50 text-xs text-slate-600">
                 Memeriksa bentrok ruangan, dosen, kelas, dan kapasitas...
               </div>
             ) : (
               pendingMove.validation && (
                 <div className="space-y-2">
                   {pendingMove.validation.valid ? (
-                    <div className="p-3 rounded-lg bg-[#e6f4ea] border border-[#ceead6] text-[#137333] text-xs flex items-center gap-2">
+                    <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2">
                       <CheckCircle2 className="h-4 w-4 shrink-0" />
                       <span>
                         Slot & ruangan bebas bentrok! Proyeksi keterisian kursi:{" "}
@@ -730,8 +796,8 @@ export function TimetableGrid({
                       </span>
                     </div>
                   ) : (
-                    <div className="p-3 rounded-lg bg-[#fce8e6] border border-[#fad2cf] text-[#c5221f] text-xs space-y-1">
-                      <div className="font-medium">Terdeteksi Bentrok / Pelanggaran Aturan:</div>
+                    <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs space-y-1">
+                      <div className="font-bold">Terdeteksi Bentrok / Pelanggaran Aturan:</div>
                       <ul className="list-disc pl-4 space-y-0.5">
                         {pendingMove.validation.conflicts.map((c, idx) => (
                           <li key={idx}>{c}</li>
@@ -741,8 +807,8 @@ export function TimetableGrid({
                   )}
 
                   {pendingMove.validation.warnings.length > 0 && (
-                    <div className="p-3 rounded-lg bg-[#fef7e0] border border-[#feefc3] text-[#b06000] text-xs space-y-1">
-                      <div className="font-medium">Catatan Efisiensi / Beban:</div>
+                    <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs space-y-1">
+                      <div className="font-bold">Catatan Efisiensi / Beban:</div>
                       <ul className="list-disc pl-4 space-y-0.5">
                         {pendingMove.validation.warnings.map((w, idx) => (
                           <li key={idx}>{w}</li>
@@ -758,7 +824,7 @@ export function TimetableGrid({
               <button
                 type="button"
                 onClick={() => setPendingMove(null)}
-                className="h-9 px-4 rounded-full text-sm font-medium text-[#1a73e8] hover:bg-[#f6fafe] cursor-pointer"
+                className="px-4 py-2 rounded-lg border border-slate-300 text-sm font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
               >
                 Batal
               </button>
@@ -770,7 +836,7 @@ export function TimetableGrid({
                   !pendingMove.validation?.valid
                 }
                 onClick={() => void handleConfirmMove(true)}
-                className="h-9 px-5 rounded-full bg-[#1a73e8] hover:bg-[#1765cc] text-white text-sm font-medium disabled:opacity-50 cursor-pointer"
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
               >
                 {saving ? "Menyimpan..." : "Simpan & Kunci"}
               </button>
