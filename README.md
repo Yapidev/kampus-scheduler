@@ -6,7 +6,8 @@ Website **Penjadwalan Mata Kuliah Kampus Otomatis** berbasis optimasi **Google O
 
 - **Generate Jadwal Otomatis (OR-Tools CP-SAT)**:
   - Bebas bentrok ruangan, dosen (+ co-dosen), dan kelas (+ kelas gabungan MKU).
-  - Memenuhi blok SKS berurutan tanpa memotong jam istirahat (ISHOMA / Sholat Jumat).
+  - Aturan operasional kampus **Senin–Jumat, 08:00–16:20** (9 slot × 50 menit, jeda ISHOMA 50 menit, blokir Sholat Jumat).
+  - Memenuhi blok SKS berurutan tanpa memotong jam istirahat.
   - Mendukung shift **Reguler** & **Karyawan**, batas SKS/hari, dan jam berhalangan dosen.
   - **Optimasi Efisiensi Ruangan**:
     1. *Best-Fit Kapasitas* (kelas kecil otomatis ditempatkan pada ruang kecil agar ruang besar hemat).
@@ -31,7 +32,7 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Database SQLite (`backend/kampus_scheduler.db`) otomatis dibuat dan diisi data contoh kampus saat pertama kali dijalankan. Untuk PostgreSQL produksi, atur environment variable `KAMPUS_DATABASE_URL`.
+Database SQLite (`backend/kampus_scheduler.db`) otomatis dibuat dan diisi data contoh skala kampus besar (**8 Fakultas, 14 Prodi, 4 Gedung, 30 Ruangan, 32 Dosen, 25 Kelas, 47 Mata Kuliah, 75 Penawaran MK**) saat pertama kali dijalankan. Untuk PostgreSQL produksi, atur environment variable `KAMPUS_DATABASE_URL`.
 
 ### 2. Frontend (Next.js — Port 3000)
 

@@ -206,9 +206,9 @@ def test_full_api_generate_conflicts_analytics_and_exports(test_client: TestClie
     res_eff = test_client.get("/api/analytics/efficiency")
     assert res_eff.status_code == 200
     eff = res_eff.json()
-    assert eff["seat_fill_efficiency_pct"] > 50.0
+    assert eff["seat_fill_efficiency_pct"] >= 70.0
     assert eff["efficiency_score"] > 0.0
-    assert len(eff["rooms"]) == 12
+    assert len(eff["rooms"]) == 30
 
     # 4. Conflict detection when moving entry onto another entry's room & time
     first, second = entries[0], entries[1]
@@ -281,7 +281,7 @@ def test_campus_hours_and_weekdays_rules_enforced(test_client: TestClient):
     # Reject manual move to Saturday
     res_gen = test_client.post(
         "/api/schedule/generate",
-        json={"preset": "balanced", "time_limit_seconds": 10.0, "respect_locked": True},
+        json={"preset": "balanced", "time_limit_seconds": 15.0, "respect_locked": True},
     )
     assert res_gen.status_code == 200
     first = res_gen.json()["entries"][0]
