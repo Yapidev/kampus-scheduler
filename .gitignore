@@ -1,0 +1,25 @@
+# Dependencies & build outputs
+node_modules/
+.next/
+out/
+frontend/next-env.d.ts
+frontend/tsconfig.tsbuildinfo
+
+# Python & caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local databases & env files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
